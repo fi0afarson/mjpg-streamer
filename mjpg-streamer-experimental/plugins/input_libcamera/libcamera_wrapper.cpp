@@ -13,12 +13,12 @@
 
 using namespace libcamera;
 
-// CŒ¾Œê‘¤‚Æ‹¤—L‚·‚éƒOƒ[ƒoƒ‹•Ï”iextern "C" “à‚É”z’uj
+// Cè¨€èªå´ã¨å…±æœ‰ã™ã‚‹ã‚°ãƒ­ãƒ¼ãƒãƒ«å¤‰æ•°ï¼ˆextern "C" å†…ã«é…ç½®ï¼‰
 extern "C" {
     unsigned char *global_jpeg_buf = nullptr;
     size_t global_jpeg_size = 0;
     pthread_mutex_t global_buf_mutex = PTHREAD_MUTEX_INITIALIZER;
-    int  is_running = 0; // ? static ‚ğŠO‚µACŒ¾Œê‚©‚çŒ©‚¦‚é‚æ‚¤‚É‚±‚±‚ÉˆÚ“®
+    int  is_running = 0; // ? static ã‚’å¤–ã—ã€Cè¨€èªã‹ã‚‰è¦‹ãˆã‚‹ã‚ˆã†ã«ã“ã“ã«ç§»å‹•
 }
 
 static std::unique_ptr<CameraManager> cm;
@@ -38,17 +38,31 @@ static bool jpeg_initialized = false;
 
 static tjhandle tj = nullptr;
 
-// JPEGì‹Æ—p
+// JPEGä½œæ¥­ç”¨
 static std::vector<unsigned char> jpeg_work_buffer;
 
-// UV•ÏŠ·ƒoƒbƒtƒ@i–ˆ‰ñŠm•Û‚µ‚È‚¢j
+// UVå¤‰æ›ãƒãƒƒãƒ•ã‚¡ï¼ˆæ¯å›ç¢ºä¿ã—ãªã„ï¼‰
 static std::vector<unsigned char> u_buffer;
 static std::vector<unsigned char> v_buffer;
 
-// ƒtƒŒ[ƒ€ŠÔˆø‚«
+// ãƒ•ãƒ¬ãƒ¼ãƒ é–“å¼•ã
 static unsigned int jpeg_frame_count = 0;
 
-// yC³zƒL[‚Íƒoƒbƒtƒ@A’l‚Íummap‚µ‚½æ“ªƒ|ƒCƒ“ƒ^(base)v‚Æuƒg[ƒ^ƒ‹ƒTƒCƒY(total_size)v‚ÌƒyƒA‚ğ•Û‘¶‚·‚é
+static std::string current_awb_mode = "auto";
+static float current_r_gain = 1.0;
+static float current_b_gain = 1.0;
+// æ–‡å­—åˆ—ã‹ã‚‰ libcamera ã® AWB ãƒ¢ãƒ¼ãƒ‰ï¼ˆæ•°å€¤ï¼‰ã¸å¤‰æ›ã™ã‚‹ãƒ˜ãƒ«ãƒ‘ãƒ¼é–¢æ•°
+static int parse_awb_mode(const std::string &mode) {
+    if (mode == "auto")      return controls::AwbAuto;
+    if (mode == "incand")    return controls::AwbIncandescent;
+    if (mode == "tungsten")  return controls::AwbTungsten;
+    if (mode == "fluorescent") return controls::AwbFluorescent;
+    if (mode == "sunlight")  return controls::AwbDaylight;
+    if (mode == "cloudy")    return controls::AwbCloudy;
+    return controls::AwbAuto; // è¦‹ã¤ã‹ã‚‰ãªã„å ´åˆã¯ãƒ‡ãƒ•ã‚©ãƒ«ãƒˆã§auto
+}
+
+// ã€ä¿®æ­£ã€‘ã‚­ãƒ¼ã¯ãƒãƒƒãƒ•ã‚¡ã€å€¤ã¯ã€Œmmapã—ãŸå…ˆé ­ãƒã‚¤ãƒ³ã‚¿(base)ã€ã¨ã€Œãƒˆãƒ¼ã‚¿ãƒ«ã‚µã‚¤ã‚º(total_size)ã€ã®ãƒšã‚¢ã‚’ä¿å­˜ã™ã‚‹
 static std::map<FrameBuffer *, std::pair<void *, size_t>> mapped_buffers;
 
 static int map_frame_buffer(FrameBuffer *buffer)
@@ -59,7 +73,7 @@ static int map_frame_buffer(FrameBuffer *buffer)
     for (const auto &p : fb_planes)
         total_size = std::max(total_size, p.offset + p.length);
 
-    // 1‚Â‚Ìfd‚©‚çA‘S‘Ì‚ÌƒTƒCƒY•ª‚ğˆêŠ‡‚Åmmap‚·‚é
+    // 1ã¤ã®fdã‹ã‚‰ã€å…¨ä½“ã®ã‚µã‚¤ã‚ºåˆ†ã‚’ä¸€æ‹¬ã§mmapã™ã‚‹
     void *base = mmap(NULL, total_size, PROT_READ, MAP_SHARED, fb_planes[0].fd.get(), 0);
 
     if (base == MAP_FAILED) {
@@ -67,7 +81,7 @@ static int map_frame_buffer(FrameBuffer *buffer)
         return -1;
     }
 
-    // ‰ğ•ú‚Éˆê”­‚ÅƒAƒ“ƒ}ƒbƒv‚Å‚«‚é‚æ‚¤Abaseƒ|ƒCƒ“ƒ^‚Æ‘SƒTƒCƒY‚ğ‹L˜^
+    // è§£æ”¾æ™‚ã«ä¸€ç™ºã§ã‚¢ãƒ³ãƒãƒƒãƒ—ã§ãã‚‹ã‚ˆã†ã€baseãƒã‚¤ãƒ³ã‚¿ã¨å…¨ã‚µã‚¤ã‚ºã‚’è¨˜éŒ²
     mapped_buffers[buffer] = std::make_pair(base, total_size);
 
     return 0;
@@ -78,7 +92,7 @@ static void unmap_frame_buffers() {
         void *base = pair.second.first;
         size_t total_size = pair.second.second;
         
-        // yC³zˆêŠ‡Šm•Û‚µ‚½‚à‚Ì‚ÍAˆêŠ‡‚Å‰ğ•ú‚·‚é
+        // ã€ä¿®æ­£ã€‘ä¸€æ‹¬ç¢ºä¿ã—ãŸã‚‚ã®ã¯ã€ä¸€æ‹¬ã§è§£æ”¾ã™ã‚‹
         if (base && base != MAP_FAILED) {
             munmap(base, total_size);
         }
@@ -93,7 +107,7 @@ bool compress_yuv420_to_jpeg_fast(
     unsigned char **jpeg_buf,
     unsigned long *jpeg_size)
 {
-    // yC³zƒ}ƒbƒvî•ñ‚©‚çbaseƒ|ƒCƒ“ƒ^‚ğæ“¾
+    // ã€ä¿®æ­£ã€‘ãƒãƒƒãƒ—æƒ…å ±ã‹ã‚‰baseãƒã‚¤ãƒ³ã‚¿ã‚’å–å¾—
     auto it = mapped_buffers.find(buffer);
     if (it == mapped_buffers.end())
         return false;
@@ -103,14 +117,14 @@ bool compress_yuv420_to_jpeg_fast(
     if (fb_planes.size() < 3)
         return false;
 
-    // baseƒ|ƒCƒ“ƒ^‚ÉŠeƒvƒŒ[ƒ“‚ÌƒIƒtƒZƒbƒg‚ğ‘«‚µ‚Ä³‚µ‚¢ˆÊ’u‚ğŒvZ
+    // baseãƒã‚¤ãƒ³ã‚¿ã«å„ãƒ—ãƒ¬ãƒ¼ãƒ³ã®ã‚ªãƒ•ã‚»ãƒƒãƒˆã‚’è¶³ã—ã¦æ­£ã—ã„ä½ç½®ã‚’è¨ˆç®—
     unsigned char *srcPlanes[3];
     srcPlanes[0] = (unsigned char *)base + fb_planes[0].offset;
     srcPlanes[1] = (unsigned char *)base + fb_planes[1].offset;
     srcPlanes[2] = (unsigned char *)base + fb_planes[2].offset;
 
     int strides[3];
-    // PiSP‚âlibcamera‚ÌYUV420‚É‚¨‚¯‚éŠeƒvƒŒ[ƒ“‚Ì³Šm‚ÈƒXƒgƒ‰ƒCƒhi•ài•j‚ğw’è
+    // PiSPã‚„libcameraã®YUV420ã«ãŠã‘ã‚‹å„ãƒ—ãƒ¬ãƒ¼ãƒ³ã®æ­£ç¢ºãªã‚¹ãƒˆãƒ©ã‚¤ãƒ‰ï¼ˆæ­©é€²å¹…ï¼‰ã‚’æŒ‡å®š
     strides[0] = fb_planes[0].length / height;
     strides[1] = fb_planes[1].length / (height / 2);
     strides[2] = fb_planes[2].length / (height / 2);
@@ -140,6 +154,24 @@ bool compress_yuv420_to_jpeg_fast(
     *jpeg_size = outSize;
 
     return true;
+}
+
+// ã€é‡è¦ã€‘ãƒªã‚¯ã‚¨ã‚¹ãƒˆã‚ªãƒ–ã‚¸ã‚§ã‚¯ãƒˆã«å¯¾ã—ã¦AWBã¨ã‚«ãƒ©ãƒ¼ã‚²ã‚¤ãƒ³ã‚’ã‚»ãƒƒãƒˆã™ã‚‹å…±é€šé–¢æ•°
+static void apply_awb_and_gains(Request *request) {
+    if (current_awb_mode == "off") {
+        // AWBã‚’å®Œå…¨ã«OFFã«ã™ã‚‹
+        request->controls().set(controls::AwbEnable, false);
+        
+        // Rã‚²ã‚¤ãƒ³ã¨Bã‚²ã‚¤ãƒ³ã‚’é…åˆ—ï¼ˆã¾ãŸã¯Spanç›¸å½“ï¼‰ã«ã—ã¦ã‚«ãƒ¡ãƒ©ã«æ¸¡ã™
+        // libcamera ã® ColourGains ã¯é€šå¸¸2ã¤ã®è¦ç´  [R, B] ã®é…åˆ—ã‚’å—ã‘ä»˜ã‘ã¾ã™
+        std::array<float, 2> gains = { current_r_gain, current_b_gain };
+        request->controls().set(controls::ColourGains, gains);
+    } else {
+        // AWBãŒONï¼ˆé€šå¸¸ãƒ¢ãƒ¼ãƒ‰ï¼‰ã®å ´åˆ
+        request->controls().set(controls::AwbEnable, true);
+        int awb_val = parse_awb_mode(current_awb_mode);
+        request->controls().set(controls::AwbMode, awb_val);
+    }
 }
 
 static void requestComplete(Request *request)
@@ -174,22 +206,30 @@ static void requestComplete(Request *request)
 
     request->reuse(Request::ReuseBuffers);
     
-    // ÅIƒ`ƒFƒbƒN: stopˆ—’†‚É queueRequest ‚³‚ê‚é‚Ì‚ğ–h‚®
+    // æœ€çµ‚ãƒã‚§ãƒƒã‚¯: stopå‡¦ç†ä¸­ã« queueRequest ã•ã‚Œã‚‹ã®ã‚’é˜²ã
     if (is_running) {
-        camera->queueRequest(request);
+        // ã€è¿½åŠ ã€‘å‘¨å›ã™ã‚‹ãƒªã‚¯ã‚¨ã‚¹ãƒˆã«å¯¾ã—ã¦ã‚‚æ¯å›ãƒãƒ‹ãƒ¥ã‚¢ãƒ«ã‚²ã‚¤ãƒ³ã‚’é©ç”¨ã—ç¶šã‘ã‚‹
+        int64_t frame_time = 1000000 / current_fps;
+        request->controls().set(controls::FrameDurationLimits, {frame_time, frame_time});
+        apply_awb_and_gains(request);
+    	
+    	camera->queueRequest(request);
     }
 }
 
 
 extern "C" {
 
-int libcamera_init(int width, int height, int fps, int quality) {
+int libcamera_init(int width, int height, int fps, int quality, const char *awb_mode, float r_gain, float b_gain) {
     std::cout << "[input_libcamera] Initializing libcamera..." << std::endl;
     
     current_width = width;
     current_height = height;
     current_fps = fps;
 	current_quality = quality;
+    current_awb_mode = awb_mode ? awb_mode : "auto";
+    current_r_gain = r_gain;
+    current_b_gain = b_gain;
 	
     if (!jpeg_initialized)
     {
@@ -240,12 +280,14 @@ int libcamera_init(int width, int height, int fps, int quality) {
         std::unique_ptr<Request> request = camera->createRequest();
         if (!request) return -1;
 
-        // yˆÀ‘S‘Îôz‘O”¼‚ÅC³‚µ‚½ˆêŠ‡mmap‚ğŒÄ‚Ño‚·
+        // ã€å®‰å…¨å¯¾ç­–ã€‘å‰åŠã§ä¿®æ­£ã—ãŸä¸€æ‹¬mmapã‚’å‘¼ã³å‡ºã™
         if (map_frame_buffer(allocated_buffers[i].get()) != 0) return -1;
-
         if (request->addBuffer(stream, allocated_buffers[i].get()) < 0) return -1;
 
+        // åˆå›æŠ•å…¥æ™‚ã®ã‚³ãƒ³ãƒˆãƒ­ãƒ¼ãƒ«ã‚»ãƒƒãƒˆ
         request->controls().set(controls::FrameDurationLimits, {frame_time, frame_time});
+        apply_awb_and_gains(request.get()); 
+    	
         requests.push_back(std::move(request));
     }
 
@@ -257,7 +299,7 @@ int libcamera_start() {
     std::cout << "[input_libcamera] libcamera_start" << std::endl;
 
     if (is_running) return 0;
-    is_running = 1; // ? 1 (true‘Š“–) ‚É•ÏX
+    is_running = 1; // ? 1 (trueç›¸å½“) ã«å¤‰æ›´
 
     if (camera->start() != 0) return -1;
 
@@ -265,7 +307,7 @@ int libcamera_start() {
         if (camera->queueRequest(request.get()) < 0) return -1;
     }
 
-    while (is_running) { // ? 1‚ÌŠÔƒ‹[ƒv
+    while (is_running) { // ? 1ã®é–“ãƒ«ãƒ¼ãƒ—
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
@@ -274,25 +316,25 @@ int libcamera_start() {
 
 
 void libcamera_stop() {
-    // Šù‚É’â~ˆ—’†‚Ìê‡‚Í‰½‚à‚µ‚È‚¢
+    // æ—¢ã«åœæ­¢å‡¦ç†ä¸­ã®å ´åˆã¯ä½•ã‚‚ã—ãªã„
     if (!is_running) return;
     is_running = 0;
 
     std::cout << "[input_libcamera] Stopping camera..." << std::endl;
 
-    // 1. ‚Ü‚¸ƒVƒOƒiƒ‹‚ğØ’f‚µ‚ÄA‚±‚êˆÈã requestComplete ƒR[ƒ‹ƒoƒbƒN‚ğ”­‰Î‚³‚¹‚È‚¢
+    // 1. ã¾ãšã‚·ã‚°ãƒŠãƒ«ã‚’åˆ‡æ–­ã—ã¦ã€ã“ã‚Œä»¥ä¸Š requestComplete ã‚³ãƒ¼ãƒ«ãƒãƒƒã‚¯ã‚’ç™ºç«ã•ã›ãªã„
     camera->requestCompleted.disconnect(requestComplete);
     
-    // 2. ƒJƒƒ‰‚ğ’â~B‚±‚ê‚É‚æ‚èƒn[ƒhƒEƒFƒA‚ÌƒLƒƒƒvƒ`ƒƒ‚ªI‚í‚èA“à•”ƒoƒbƒtƒ@‚ªˆÀ‘S‚Éƒtƒ‰ƒbƒVƒ…‚³‚ê‚Ü‚·
+    // 2. ã‚«ãƒ¡ãƒ©ã‚’åœæ­¢ã€‚ã“ã‚Œã«ã‚ˆã‚Šãƒãƒ¼ãƒ‰ã‚¦ã‚§ã‚¢ã®ã‚­ãƒ£ãƒ—ãƒãƒ£ãŒçµ‚ã‚ã‚Šã€å†…éƒ¨ãƒãƒƒãƒ•ã‚¡ãŒå®‰å…¨ã«ãƒ•ãƒ©ãƒƒã‚·ãƒ¥ã•ã‚Œã¾ã™
     camera->stop();
     
-    // 3. ƒoƒbƒtƒ@‚ğQÆ‚µ‚Ä‚¢‚éRequestƒIƒuƒWƒFƒNƒg‚ğŠ®‘S‚ÉƒNƒŠƒA
+    // 3. ãƒãƒƒãƒ•ã‚¡ã‚’å‚ç…§ã—ã¦ã„ã‚‹Requestã‚ªãƒ–ã‚¸ã‚§ã‚¯ãƒˆã‚’å®Œå…¨ã«ã‚¯ãƒªã‚¢
     requests.clear();
     
-    // 4. ‘O”¼‚ÅC³‚µ‚½uˆêŠ‡munmapv‚ğŒÄ‚Ño‚µAƒƒ‚ƒŠƒŠ[ƒN‚Æ•s³ƒAƒNƒZƒX‚ğ—¼•û–h‚®
+    // 4. å‰åŠã§ä¿®æ­£ã—ãŸã€Œä¸€æ‹¬munmapã€ã‚’å‘¼ã³å‡ºã—ã€ãƒ¡ãƒ¢ãƒªãƒªãƒ¼ã‚¯ã¨ä¸æ­£ã‚¢ã‚¯ã‚»ã‚¹ã‚’ä¸¡æ–¹é˜²ã
     unmap_frame_buffers();
 
-    // 5. allocator‚Ì‰ğ•ú
+    // 5. allocatorã®è§£æ”¾
     if (allocator) {
         for (Stream *stream : camera->streams()) {
             allocator->free(stream);
@@ -301,14 +343,14 @@ void libcamera_stop() {
         allocator = nullptr;
     }
 
-    // 6. ƒJƒƒ‰ƒfƒoƒCƒX‚Ì‰ğ•ú
+    // 6. ã‚«ãƒ¡ãƒ©ãƒ‡ãƒã‚¤ã‚¹ã®è§£æ”¾
     camera->release();
     camera.reset();
     cm->stop();
     cm.reset();
 
-    // 7. TurboJPEG‚¨‚æ‚ÑƒOƒ[ƒoƒ‹ƒoƒbƒtƒ@‚Ì‰ğ•ú
-    // global_buf_mutex‚Ì”jŠü‚ğ”ğ‚¯‚é‚½‚ßA”r‘¼§Œä‚ğ‚µ‚ÄƒNƒŠƒA
+    // 7. TurboJPEGãŠã‚ˆã³ã‚°ãƒ­ãƒ¼ãƒãƒ«ãƒãƒƒãƒ•ã‚¡ã®è§£æ”¾
+    // global_buf_mutexã®ç ´æ£„ã‚’é¿ã‘ã‚‹ãŸã‚ã€æ’ä»–åˆ¶å¾¡ã‚’ã—ã¦ã‚¯ãƒªã‚¢
     pthread_mutex_lock(&global_buf_mutex);
     if (global_jpeg_buf) {
         tjFree(global_jpeg_buf);

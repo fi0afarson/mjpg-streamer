@@ -1,3 +1,11 @@
+libcameraに対応してみた。
+使用例
+```
+LIBCAMERA_RPI_TUNING_FILE=/usr/share/libcamera/ipa/rpi/pisp/ov5647.json /home/pi/mjpg-streamer/mjpg-streamer-experimental/mjpg_streamer \
+-i "/home/pi/mjpg-streamer/mjpg-streamer-experimental/input_libcamera.so -x 640 -y 480 -f 30" \
+-o "/usr/local/lib/mjpg-streamer/output_http.so -w /home/pi/mjpg-streamer/mjpg-streamer-experimental/www -p 8080"
+```
+
 mjpg-streamer
 =============
 

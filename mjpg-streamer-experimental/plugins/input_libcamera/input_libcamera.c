@@ -9,7 +9,8 @@
 #include "../../mjpg_streamer.h"
 #include "../../utils.h"
 
-extern int libcamera_init(int width, int height, int fps, int quality);
+extern int libcamera_init(int width, int height, int fps, int quality, const char *awb_mode, float r_gain, float b_gain);
+
 extern int libcamera_start(void);
 extern void libcamera_stop(void);
 
@@ -27,6 +28,9 @@ typedef struct {
     int height;
     int fps;
     int quality;
+    char awb_mode[32];
+    float r_gain;      // ? y’Ç‰ÁzRƒQƒCƒ“
+    float b_gain;      // ? y’Ç‰ÁzBƒQƒCƒ“
 	pthread_t thread;
     globals *pglobal; 
     int plugin_id;
@@ -81,23 +85,36 @@ void *worker_thread(void *arg) {
 
 int input_init(input_parameter *param, int id)
 {
-    config.width  = 640;
-    config.height = 480;
-    config.fps    = 30;
+    config.width   = 640;
+    config.height  = 480;
+    config.fps     = 30;
     config.quality = 75;
-	
+    strcpy(config.awb_mode, "auto");
+    config.r_gain  = 1.0; // ? y’Ç‰ÁzƒfƒtƒHƒ‹ƒg’l
+    config.b_gain  = 1.0; // ? y’Ç‰ÁzƒfƒtƒHƒ‹ƒg’l
+
     int c;
     optind = 1;
 
-    while ((c = getopt(param->argc, param->argv, "x:y:f:q:")) != -1) {
+    // yC³zgetopt‚Ì‰ðÍˆø”‚É "r:b:" ‚ð’Ç‰ÁA"g:" ‚ðíœ
+    while ((c = getopt(param->argc, param->argv, "x:y:f:q:a:r:b:")) != -1) {
         switch(c) {
         case 'x': config.width = atoi(optarg); break;
         case 'y': config.height = atoi(optarg); break;
         case 'f': config.fps = atoi(optarg); break;
-        case 'q': 
+        case 'q':
             config.quality = atoi(optarg);
             if (config.quality < 1)  config.quality = 1;
             if (config.quality > 100) config.quality = 100;
+            break;
+        case 'a':
+            strncpy(config.awb_mode, optarg, sizeof(config.awb_mode) - 1);
+            break;
+        case 'r': // ? y’Ç‰ÁzRƒQƒCƒ“‚ÌŽæ“¾
+            config.r_gain = atof(optarg);
+            break;
+        case 'b': // ? y’Ç‰ÁzBƒQƒCƒ“‚ÌŽæ“¾
+            config.b_gain = atof(optarg);
             break;
         default: break;
         }
@@ -106,19 +123,16 @@ int input_init(input_parameter *param, int id)
     config.pglobal = param->global;
     config.plugin_id = id;
 
-    // yŽ©“®ŒvŽZzƒtƒŒ[ƒ€ƒŒ[ƒgŽüŠúi1000000 / fpsj‚Ì–ñ75%‚ÌŽžŠÔ‚ðƒXƒŠ[ƒvŽžŠÔ‚ÉÝ’è
-    // —á: 30fps(ŽüŠú33.3ms) ? –ñ25msƒXƒŠ[ƒv
-    // —á: 10fps(ŽüŠú100ms)  ? –ñ75msƒXƒŠ[ƒv
     if (config.fps > 0) {
         config.sleep_time_us = (1000000 / config.fps) * 3 / 4;
     } else {
-        config.sleep_time_us = 1000 * 25; // ƒfƒtƒHƒ‹ƒg25ms
+        config.sleep_time_us = 1000 * 25;
     }
 
-    IPRINT("libcamera size=%dx%d fps=%d quality=%d (sleep=%d us)\n", 
-           config.width, config.height, config.fps, config.quality, config.sleep_time_us);
+    // ƒƒO‚ÉAWBÝ’è‚ðo—Í
+    IPRINT("libcamera size=%dx%d fps=%d quality=%d awb=%s (R_Gain=%.2f, B_Gain=%.2f)\n", 
+           config.width, config.height, config.fps, config.quality, config.awb_mode, config.r_gain, config.b_gain);
 
-    // ‰Šú‰»Žž‚Éƒtƒ‹HD‚É‚à‘Ï‚¦‚ç‚ê‚éŒÅ’èƒoƒbƒtƒ@i2MBj‚ð1‰ñ‚¾‚¯Šm•Û
     pthread_mutex_lock(&config.pglobal->in[config.plugin_id].db);
     config.pglobal->in[config.plugin_id].buf = (unsigned char *)malloc(MAX_JPEG_SIZE);
     config.pglobal->in[config.plugin_id].size = 0;
@@ -129,7 +143,8 @@ int input_init(input_parameter *param, int id)
         return -1;
     }
 
-    if (libcamera_init(config.width, config.height, config.fps, config.quality) != 0) {
+    // yC³zˆø”‚ð•ÏX‚µ‚ÄC++‘¤‚ðŒÄ‚Ño‚µ
+    if (libcamera_init(config.width, config.height, config.fps, config.quality, config.awb_mode, config.r_gain, config.b_gain) != 0) {
         IPRINT("Failed to initialize libcamera\n");
         free(config.pglobal->in[config.plugin_id].buf);
         config.pglobal->in[config.plugin_id].buf = NULL;
