@@ -1,4 +1,5 @@
-libcameraに対応してみた。
+libcameraに対応してみた。（bookworm 32bitで確認）
+
 使用例
 ```
 LIBCAMERA_RPI_TUNING_FILE=/usr/share/libcamera/ipa/rpi/pisp/ov5647.json /home/pi/mjpg-streamer/mjpg-streamer-experimental/mjpg_streamer \
